@@ -1,40 +1,27 @@
-# trip_processor.py
-
-import csv
-import logging
+import streamlit as st
+import pandas as pd
 from collections import defaultdict
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s',
-    handlers=[
-        logging.FileHandler("trip_processor.log"),
-        logging.StreamHandler()
-    ]
-)
+# Streamlit app title and description
+st.title("Trip Origin and Destination Processor")
+st.write("""
+Upload a CSV or Excel file (.xlsx) containing trip segments. This app will determine the overall trip origin and destination for each trip
+based on the data provided. The required columns are:
+- **Order #**
+- **Passenger**
+- **BP Origin**
+- **BP Destination**
+""")
 
-input_file = 'input.csv'      # Replace with your input file name
-output_file = 'output.csv'    # Replace with your desired output file name
+# File uploader widget for users to upload CSV or Excel files
+uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx"])
 
-# Read the CSV file
-with open(input_file, mode='r', newline='', encoding='utf-8') as csvfile:
-    reader = csv.DictReader(csvfile)
-    records = list(reader)
-
-# Group trip segments by Order # and Passenger
-orders = defaultdict(list)
-
-for record in records:
-    order_number = record['Order #']
-    passenger = record['Passenger']
-    key = (order_number, passenger)
-    orders[key].append(record)
-
+# Function to determine trip origin and destination using a graph-based approach
 def determine_trip_origin_destination(trip_segments, order_number, passenger):
     graph = {}
     nodes = set()
     in_degree = {}
+    anomalies = []
 
     # Build the graph and compute in-degrees
     for segment in trip_segments:
@@ -43,7 +30,7 @@ def determine_trip_origin_destination(trip_segments, order_number, passenger):
 
         # Skip if origin or destination is missing
         if not origin or not destination:
-            logging.warning(f"Order {order_number}, Passenger {passenger}: Missing origin or destination in segment.")
+            anomalies.append(f"Order {order_number}, Passenger {passenger}: Missing origin or destination in a segment.")
             continue
 
         # Add the edge to the graph
@@ -68,42 +55,94 @@ def determine_trip_origin_destination(trip_segments, order_number, passenger):
 
     # Handle anomalies
     if len(trip_origins) == 0:
-        logging.error(f"Order {order_number}, Passenger {passenger}: No trip origin found.")
+        anomalies.append(f"Order {order_number}, Passenger {passenger}: No trip origin found.")
     elif len(trip_origins) > 1:
-        logging.warning(f"Order {order_number}, Passenger {passenger}: Multiple trip origins found: {trip_origins}")
-        trip_origin = trip_origins[0]  # You may choose to handle this differently
+        anomalies.append(f"Order {order_number}, Passenger {passenger}: Multiple trip origins found: {trip_origins}")
+        trip_origin = trip_origins[0]
     else:
         trip_origin = trip_origins[0]
 
     if len(trip_destinations) == 0:
-        logging.error(f"Order {order_number}, Passenger {passenger}: No trip destination found.")
+        anomalies.append(f"Order {order_number}, Passenger {passenger}: No trip destination found.")
     elif len(trip_destinations) > 1:
-        logging.warning(f"Order {order_number}, Passenger {passenger}: Multiple trip destinations found: {trip_destinations}")
-        trip_destination = trip_destinations[0]  # You may choose to handle this differently
+        anomalies.append(f"Order {order_number}, Passenger {passenger}: Multiple trip destinations found: {trip_destinations}")
+        trip_destination = trip_destinations[0]
     else:
         trip_destination = trip_destinations[0]
 
-    return trip_origin, trip_destination
+    return trip_origin, trip_destination, anomalies
 
-# Process each (Order #, Passenger) group
-for key, trip_segments in orders.items():
-    order_number, passenger = key
-    # Determine trip origin and destination
-    trip_origin, trip_destination = determine_trip_origin_destination(trip_segments, order_number, passenger)
+# Main processing logic
+if uploaded_file is not None:
+    try:
+        # Determine the file type and read the file accordingly
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(".xlsx"):
+            df = pd.read_excel(uploaded_file, engine='openpyxl')
+        else:
+            st.error("Unsupported file type. Please upload a CSV or Excel file.")
+            st.stop()
 
-    # Append to each segment record
-    for segment in trip_segments:
-        segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
-        segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
+        # Check if required columns are present
+        required_columns = ['Order #', 'Passenger', 'BP Origin', 'BP Destination']
+        if not all(col in df.columns for col in required_columns):
+            st.error(f"The uploaded file must contain the following columns: {', '.join(required_columns)}")
+        else:
+            # Convert DataFrame to list of dictionaries
+            records = df.to_dict(orient='records')
 
-# Get fieldnames, including the new ones
-fieldnames = records[0].keys()
+            # Group trip segments by Order # and Passenger
+            orders = defaultdict(list)
+            for record in records:
+                order_number = record['Order #']
+                passenger = record['Passenger']
+                key = (order_number, passenger)
+                orders[key].append(record)
 
-# Write the updated records to the output CSV file
-with open(output_file, mode='w', newline='', encoding='utf-8') as csvfile:
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(records)
+            # Initialize a list to collect all anomalies
+            all_anomalies = []
 
-print(f"Processing complete. Output written to '{output_file}'.")
-print("Check 'trip_processor.log' for any warnings or errors.")
+            # Process each (Order #, Passenger) group
+            for key, trip_segments in orders.items():
+                order_number, passenger = key
+                trip_origin, trip_destination, anomalies = determine_trip_origin_destination(trip_segments, order_number, passenger)
+
+                # Collect anomalies
+                all_anomalies.extend(anomalies)
+
+                # Append Trip Origin and Trip Destination to each segment record
+                for segment in trip_segments:
+                    segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
+                    segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
+
+            # Convert updated records back to a DataFrame
+            result_df = pd.DataFrame(records)
+
+            # Display anomalies if any were found
+            if all_anomalies:
+                st.warning("Data anomalies detected during processing:")
+                for anomaly in all_anomalies:
+                    st.write(f"- {anomaly}")
+            else:
+                st.success("Processing complete without anomalies!")
+
+            # Display the processed data
+            st.write("Processed Data:")
+            st.dataframe(result_df)
+
+            # Allow users to download the processed data as a CSV file
+            def convert_df(df):
+                return df.to_csv(index=False).encode('utf-8')
+
+            csv = convert_df(result_df)
+            st.download_button(
+                label="Download Processed Data as CSV",
+                data=csv,
+                file_name='processed_trips.csv',
+                mime='text/csv'
+            )
+    except Exception as e:
+        st.error(f"An error occurred while processing the file: {e}")
+else:
+    st.info("Please upload a CSV or Excel file to start processing.")
