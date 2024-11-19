@@ -2,22 +2,27 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
+# Import the data enrichment functions
+from data_enrichment import load_customer_data, enrich_uploaded_data
+
 def main():
     # Streamlit app title and description
-    st.title("Trip Origin and Destination Processor")
+    st.title("Trip Origin and Destination Processor with Data Enrichment")
     st.write("""
     Upload a CSV or Excel file (.xlsx) containing trip segments. This app will determine the overall trip origin and destination for each trip
-    based on the data provided. The required columns are:
-    
+    based on the data provided and enrich the data with customer information.
+
+    **Required columns in the uploaded file**:
     - **Order #**
     - **Passenger** or **Pax**
     - **BP Origin**
     - **BP Destination**
     - **Schedule Date**
-    
+    - **Customer Email** or **Cust Email**
+
     The app groups records by **Order #**, **Schedule Date**, and **Passenger**.
     """)
-    
+
     # Instructions in an expander
     with st.expander("Instructions"):
         st.write("""
@@ -27,94 +32,115 @@ def main():
             - **BP Origin**
             - **BP Destination**
             - **Schedule Date**
+            - **Customer Email** or **Cust Email**
         - Columns must be named exactly as specified.
         - Dates should be in a consistent format (e.g., **MM/DD/YYYY**).
         - If your data includes a column indicating the sequence of segments (e.g., 'Barcode', 'Segment Number', 'Departure Time'), it will improve accuracy.
         - The app groups records by **Order #**, **Schedule Date**, and **Passenger**.
         """)
-    
+
     # File uploader widget for users to upload CSV or Excel files
-    uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx"])
-    
+    uploaded_file = st.file_uploader("Choose a trip segments file", type=["csv", "xlsx"])
+
+    # File uploader for customer data file
+    customer_file = st.file_uploader("Choose a customer data file", type=["csv"])
+
     # Main processing logic
-    if uploaded_file is not None:
+    if uploaded_file is not None and customer_file is not None:
         try:
-            # Read the uploaded file
+            # Read the uploaded trip segments file
             df = read_uploaded_file(uploaded_file)
-    
+
+            # Read the customer data file
+            customer_data = load_customer_data(customer_file)
+
             # Check if required columns are present
             required_columns = ['Order #', 'BP Origin', 'BP Destination', 'Schedule Date']
             passenger_column = None
             if 'Passenger' in df.columns:
                 passenger_column = 'Passenger'
             elif 'Pax' in df.columns:
-                passenger_column = 'Pax'
                 df.rename(columns={'Pax': 'Passenger'}, inplace=True)
                 passenger_column = 'Passenger'
             else:
                 st.error("The uploaded file must contain a 'Passenger' or 'Pax' column.")
                 return
             required_columns.append('Passenger')
-    
+
+            # Check for 'Customer Email' or 'Cust Email' column
+            if 'Customer Email' in df.columns:
+                email_column = 'Customer Email'
+            elif 'Cust Email' in df.columns:
+                df.rename(columns={'Cust Email': 'Customer Email'}, inplace=True)
+                email_column = 'Customer Email'
+            else:
+                st.error("The uploaded file must contain a 'Customer Email' or 'Cust Email' column.")
+                return
+            required_columns.append(email_column)
+
             if not all(col in df.columns for col in required_columns):
                 st.error(f"The uploaded file must contain the following columns: {', '.join(required_columns)}")
                 return
-    
+
             # Convert 'Schedule Date' to datetime.date
             df = convert_schedule_date(df)
-    
+
             # Identify sequence column if available
             sequence_column = identify_sequence_column(df)
-    
+
             # Sort the DataFrame to ensure segments are in chronological order
             df = sort_dataframe(df, sequence_column)
-    
+
+            # Enrich the uploaded data with customer data
+            df = enrich_uploaded_data(df, customer_data)
+
+            # Proceed with your existing logic
             # Convert DataFrame to list of dictionaries
             records = df.to_dict(orient='records')
-    
+
             # Group trip segments by Order #, Schedule Date, and Passenger
             orders = group_trip_segments(records)
-    
+
             # Initialize a list to collect all anomalies
             all_anomalies = []
-    
+
             # Process each trip group
             processed_records = []
             for key, trip_segments in orders.items():
                 order_number, schedule_date, passenger = key
-    
+
                 # Determine trip origin and destination
                 trip_origin, trip_destination, anomalies = determine_trip_origin_destination(
                     trip_segments, order_number, schedule_date, passenger
                 )
-    
+
                 # Collect anomalies
                 all_anomalies.extend(anomalies)
-    
+
                 # Append Trip Origin and Trip Destination to each segment record
                 for segment in trip_segments:
                     segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
                     segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
                     processed_records.append(segment)
-    
+
             # Convert updated records back to a DataFrame
             result_df = pd.DataFrame(processed_records)
-    
+
             # Display anomalies if any were found
             display_anomalies(all_anomalies)
-    
+
             # Display the processed data
-            st.write("Processed Data:")
+            st.write("Processed and Enriched Data:")
             st.dataframe(result_df)
-    
+
             # Allow users to download the processed data as a CSV file
             download_processed_data(result_df)
-    
+
         except Exception as e:
             st.error(f"An unexpected error occurred while processing the file: {e}")
             st.stop()
     else:
-        st.info("Please upload a CSV or Excel file to start processing.")
+        st.info("Please upload both the trip segments file and the customer data file to start processing.")
 
 def read_uploaded_file(uploaded_file):
     """Reads the uploaded CSV or Excel file and returns a DataFrame."""
