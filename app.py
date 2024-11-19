@@ -2,80 +2,123 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 
-# Streamlit app title and description
-st.title("Trip Origin and Destination Processor")
-st.write("""
-Upload a CSV or Excel file (.xlsx) containing trip segments. This app will determine the overall trip origin and destination for each trip
-based on the data provided. The required columns are:
-- **Order #**
-- **Passenger**
-- **BP Origin**
-- **BP Destination**
-""")
-
-# File uploader widget for users to upload CSV or Excel files
-uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx"])
-
-# Function to determine trip origin and destination using a graph-based approach
-def determine_trip_origin_destination(trip_segments, order_number, passenger):
-    graph = {}
-    nodes = set()
-    in_degree = {}
-    anomalies = []
-
-    # Build the graph and compute in-degrees
-    for segment in trip_segments:
-        origin = segment['BP Origin']
-        destination = segment['BP Destination']
-
-        # Skip if origin or destination is missing
-        if not origin or not destination:
-            anomalies.append(f"Order {order_number}, Passenger {passenger}: Missing origin or destination in a segment.")
-            continue
-
-        # Add the edge to the graph
-        graph.setdefault(origin, []).append(destination)
-
-        # Update nodes set
-        nodes.update([origin, destination])
-
-        # Update in-degree counts
-        in_degree[destination] = in_degree.get(destination, 0) + 1
-        in_degree.setdefault(origin, in_degree.get(origin, 0))
-
-    # Compute out-degrees
-    out_degree = {node: len(graph.get(node, [])) for node in nodes}
-
-    # Identify trip origins and destinations
-    trip_origins = [node for node in nodes if in_degree.get(node, 0) == 0]
-    trip_destinations = [node for node in nodes if out_degree.get(node, 0) == 0]
-
-    # Initialize trip origin and destination
-    trip_origin = trip_destination = None
-
-    # Handle anomalies
-    if len(trip_origins) == 0:
-        anomalies.append(f"Order {order_number}, Passenger {passenger}: No trip origin found.")
-    elif len(trip_origins) > 1:
-        anomalies.append(f"Order {order_number}, Passenger {passenger}: Multiple trip origins found: {trip_origins}")
-        trip_origin = trip_origins[0]
+def main():
+    # Streamlit app title and description
+    st.title("Trip Origin and Destination Processor")
+    st.write("""
+    Upload a CSV or Excel file (.xlsx) containing trip segments. This app will determine the overall trip origin and destination for each trip
+    based on the data provided. The required columns are:
+    
+    - **Order #**
+    - **Passenger** or **Pax**
+    - **BP Origin**
+    - **BP Destination**
+    - **Schedule Date**
+    
+    The app groups records by **Order #**, **Schedule Date**, and **Passenger**.
+    """)
+    
+    # Instructions in an expander
+    with st.expander("Instructions"):
+        st.write("""
+        - Ensure your data file includes the required columns:
+            - **Order #**
+            - **Passenger** or **Pax**
+            - **BP Origin**
+            - **BP Destination**
+            - **Schedule Date**
+        - Columns must be named exactly as specified.
+        - Dates should be in a consistent format (e.g., **MM/DD/YYYY**).
+        - If your data includes a column indicating the sequence of segments (e.g., 'Barcode', 'Segment Number', 'Departure Time'), it will improve accuracy.
+        - The app groups records by **Order #**, **Schedule Date**, and **Passenger**.
+        """)
+    
+    # File uploader widget for users to upload CSV or Excel files
+    uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx"])
+    
+    # Main processing logic
+    if uploaded_file is not None:
+        try:
+            # Read the uploaded file
+            df = read_uploaded_file(uploaded_file)
+    
+            # Check if required columns are present
+            required_columns = ['Order #', 'BP Origin', 'BP Destination', 'Schedule Date']
+            passenger_column = None
+            if 'Passenger' in df.columns:
+                passenger_column = 'Passenger'
+            elif 'Pax' in df.columns:
+                passenger_column = 'Pax'
+                df.rename(columns={'Pax': 'Passenger'}, inplace=True)
+                passenger_column = 'Passenger'
+            else:
+                st.error("The uploaded file must contain a 'Passenger' or 'Pax' column.")
+                return
+            required_columns.append('Passenger')
+    
+            if not all(col in df.columns for col in required_columns):
+                st.error(f"The uploaded file must contain the following columns: {', '.join(required_columns)}")
+                return
+    
+            # Convert 'Schedule Date' to datetime.date
+            df = convert_schedule_date(df)
+    
+            # Identify sequence column if available
+            sequence_column = identify_sequence_column(df)
+    
+            # Sort the DataFrame to ensure segments are in chronological order
+            df = sort_dataframe(df, sequence_column)
+    
+            # Convert DataFrame to list of dictionaries
+            records = df.to_dict(orient='records')
+    
+            # Group trip segments by Order #, Schedule Date, and Passenger
+            orders = group_trip_segments(records)
+    
+            # Initialize a list to collect all anomalies
+            all_anomalies = []
+    
+            # Process each trip group
+            processed_records = []
+            for key, trip_segments in orders.items():
+                order_number, schedule_date, passenger = key
+    
+                # Determine trip origin and destination
+                trip_origin, trip_destination, anomalies = determine_trip_origin_destination(
+                    trip_segments, order_number, schedule_date, passenger
+                )
+    
+                # Collect anomalies
+                all_anomalies.extend(anomalies)
+    
+                # Append Trip Origin and Trip Destination to each segment record
+                for segment in trip_segments:
+                    segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
+                    segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
+                    processed_records.append(segment)
+    
+            # Convert updated records back to a DataFrame
+            result_df = pd.DataFrame(processed_records)
+    
+            # Display anomalies if any were found
+            display_anomalies(all_anomalies)
+    
+            # Display the processed data
+            st.write("Processed Data:")
+            st.dataframe(result_df)
+    
+            # Allow users to download the processed data as a CSV file
+            download_processed_data(result_df)
+    
+        except Exception as e:
+            st.error(f"An unexpected error occurred while processing the file: {e}")
+            st.stop()
     else:
-        trip_origin = trip_origins[0]
+        st.info("Please upload a CSV or Excel file to start processing.")
 
-    if len(trip_destinations) == 0:
-        anomalies.append(f"Order {order_number}, Passenger {passenger}: No trip destination found.")
-    elif len(trip_destinations) > 1:
-        anomalies.append(f"Order {order_number}, Passenger {passenger}: Multiple trip destinations found: {trip_destinations}")
-        trip_destination = trip_destinations[0]
-    else:
-        trip_destination = trip_destinations[0]
-
-    return trip_origin, trip_destination, anomalies
-
-# Main processing logic
-if uploaded_file is not None:
+def read_uploaded_file(uploaded_file):
+    """Reads the uploaded CSV or Excel file and returns a DataFrame."""
     try:
-        # Determine the file type and read the file accordingly
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         elif uploaded_file.name.endswith(".xlsx"):
@@ -83,66 +126,140 @@ if uploaded_file is not None:
         else:
             st.error("Unsupported file type. Please upload a CSV or Excel file.")
             st.stop()
-
-        # Check if required columns are present
-        required_columns = ['Order #', 'Passenger', 'BP Origin', 'BP Destination']
-        if not all(col in df.columns for col in required_columns):
-            st.error(f"The uploaded file must contain the following columns: {', '.join(required_columns)}")
-        else:
-            # Convert DataFrame to list of dictionaries
-            records = df.to_dict(orient='records')
-
-            # Group trip segments by Order # and Passenger
-            orders = defaultdict(list)
-            for record in records:
-                order_number = record['Order #']
-                passenger = record['Passenger']
-                key = (order_number, passenger)
-                orders[key].append(record)
-
-            # Initialize a list to collect all anomalies
-            all_anomalies = []
-
-            # Process each (Order #, Passenger) group
-            for key, trip_segments in orders.items():
-                order_number, passenger = key
-                trip_origin, trip_destination, anomalies = determine_trip_origin_destination(trip_segments, order_number, passenger)
-
-                # Collect anomalies
-                all_anomalies.extend(anomalies)
-
-                # Append Trip Origin and Trip Destination to each segment record
-                for segment in trip_segments:
-                    segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
-                    segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
-
-            # Convert updated records back to a DataFrame
-            result_df = pd.DataFrame(records)
-
-            # Display anomalies if any were found
-            if all_anomalies:
-                st.warning("Data anomalies detected during processing:")
-                for anomaly in all_anomalies:
-                    st.write(f"- {anomaly}")
-            else:
-                st.success("Processing complete without anomalies!")
-
-            # Display the processed data
-            st.write("Processed Data:")
-            st.dataframe(result_df)
-
-            # Allow users to download the processed data as a CSV file
-            def convert_df(df):
-                return df.to_csv(index=False).encode('utf-8')
-
-            csv = convert_df(result_df)
-            st.download_button(
-                label="Download Processed Data as CSV",
-                data=csv,
-                file_name='processed_trips.csv',
-                mime='text/csv'
-            )
+        return df
     except Exception as e:
-        st.error(f"An error occurred while processing the file: {e}")
-else:
-    st.info("Please upload a CSV or Excel file to start processing.")
+        st.error(f"Error reading the uploaded file: {e}")
+        st.stop()
+
+def convert_schedule_date(df):
+    """Converts the 'Schedule Date' column to datetime.date."""
+    try:
+        df['Schedule Date'] = pd.to_datetime(df['Schedule Date']).dt.date
+        return df
+    except Exception as e:
+        st.error(f"Error converting 'Schedule Date' to date: {e}")
+        st.stop()
+
+def identify_sequence_column(df):
+    """Identifies a sequence column if available."""
+    sequence_column = None
+    possible_sequence_columns = ['Barcode', 'Boarding Pass', 'Segment ID', 'Segment Number', 'Sequence', 'Departure Time']
+    for col in possible_sequence_columns:
+        if col in df.columns:
+            sequence_column = col
+            break
+    return sequence_column
+
+def sort_dataframe(df, sequence_column):
+    """Sorts the DataFrame based on grouping columns and sequence."""
+    try:
+        if sequence_column:
+            df = df.sort_values(by=['Order #', 'Passenger', 'Schedule Date', sequence_column])
+        else:
+            df = df.sort_values(by=['Order #', 'Passenger', 'Schedule Date'])
+            st.warning("No sequence column found. Sorting by 'Order #', 'Passenger', and 'Schedule Date' only. Ensure your data is in the correct order.")
+        return df
+    except Exception as e:
+        st.error(f"Error sorting the DataFrame: {e}")
+        st.stop()
+
+def group_trip_segments(records):
+    """Groups trip segments by Order #, Schedule Date, and Passenger."""
+    orders = defaultdict(list)
+    for record in records:
+        order_number = record['Order #']
+        schedule_date = record['Schedule Date']
+        passenger = record['Passenger']
+        key = (order_number, schedule_date, passenger)
+        orders[key].append(record)
+    return orders
+
+def determine_trip_origin_destination(trip_segments, order_number, schedule_date, passenger):
+    """Determines the trip origin and destination using traversal logic."""
+    anomalies = []
+
+    if not trip_segments:
+        anomalies.append(
+            f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: No segments found."
+        )
+        return None, None, anomalies
+
+    # Initialize trip origin and destination
+    trip_origin = trip_segments[0]['BP Origin']
+    trip_destination = None
+
+    if not trip_origin:
+        anomalies.append(
+            f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Missing BP Origin in the first segment."
+        )
+        return None, None, anomalies
+
+    # Set to keep track of visited nodes
+    visited_nodes = set()
+    visited_nodes.add(trip_origin)
+
+    # Traverse segments starting from the second segment
+    for i in range(1, len(trip_segments)):
+        current_segment = trip_segments[i]
+        bp_origin = current_segment.get('BP Origin')
+        bp_destination = current_segment.get('BP Destination')
+
+        if not bp_origin or not bp_destination:
+            anomalies.append(
+                f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Missing BP Origin or BP Destination in segment {i + 1}."
+            )
+            continue
+
+        # Check if BP Origin has been visited before
+        if bp_origin in visited_nodes:
+            # Trip destination is BP Origin of the previous segment
+            trip_destination = trip_segments[i - 1]['BP Origin']
+            break
+        else:
+            # Add BP Origin to visited_nodes
+            visited_nodes.add(bp_origin)
+
+    # If destination not found during traversal
+    if trip_destination is None:
+        # Trip destination is BP Destination of the last segment
+        trip_destination = trip_segments[-1]['BP Destination']
+
+    # Anomaly Detection
+    if trip_destination is None:
+        anomalies.append(
+            f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Could not determine trip destination."
+        )
+
+    return trip_origin, trip_destination, anomalies
+
+def display_anomalies(all_anomalies):
+    """Displays anomalies if any were found."""
+    if all_anomalies:
+        st.warning("Data anomalies detected during processing:")
+        with st.expander("Click to view anomalies"):
+            for anomaly in all_anomalies:
+                st.write(f"- {anomaly}")
+        # Option to download anomalies
+        anomalies_df = pd.DataFrame({'Anomalies': all_anomalies})
+        anomalies_csv = anomalies_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Anomalies as CSV",
+            data=anomalies_csv,
+            file_name='anomalies.csv',
+            mime='text/csv'
+        )
+    else:
+        st.success("Processing complete without anomalies!")
+
+def download_processed_data(result_df):
+    """Allows users to download the processed data as a CSV file."""
+    csv = result_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Processed Data as CSV",
+        data=csv,
+        file_name='processed_trips.csv',
+        mime='text/csv'
+    )
+
+if __name__ == "__main__":
+    main()
