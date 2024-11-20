@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from collections import defaultdict
+from io import BytesIO
 
 # Import the data enrichment functions
 from data_enrichment import load_customer_data, enrich_uploaded_data
@@ -97,40 +98,27 @@ def main():
                 st.write("Unique Customer Summary:")
                 st.dataframe(customer_summary_df)
 
-                # Allow users to download the customer summary as a CSV file
+                # Allow users to download the customer summary
                 download_customer_summary(customer_summary_df)
             else:
-                # Proceed with the existing logic
-
-                # Convert DataFrame to list of dictionaries
+                # Process the enriched data
                 records = df.to_dict(orient='records')
-
-                # Group trip segments by Order #, Schedule Date, and Passenger
                 orders = group_trip_segments(records)
-
-                # Initialize a list to collect all anomalies
                 all_anomalies = []
-
-                # Process each trip group
                 processed_records = []
+
                 for key, trip_segments in orders.items():
                     order_number, schedule_date, passenger = key
-
-                    # Determine trip origin and destination
                     trip_origin, trip_destination, anomalies = determine_trip_origin_destination(
                         trip_segments, order_number, schedule_date, passenger
                     )
-
-                    # Collect anomalies
                     all_anomalies.extend(anomalies)
 
-                    # Append Trip Origin and Trip Destination to each segment record
                     for segment in trip_segments:
                         segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
                         segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
                         processed_records.append(segment)
 
-                # Convert updated records back to a DataFrame
                 result_df = pd.DataFrame(processed_records)
 
                 # Display anomalies if any were found
@@ -140,7 +128,7 @@ def main():
                 st.write("Processed and Enriched Data:")
                 st.dataframe(result_df)
 
-                # Allow users to download the processed data as a CSV file
+                # Allow users to download the processed data
                 download_processed_data(result_df)
 
         except Exception as e:
@@ -149,18 +137,24 @@ def main():
     else:
         st.info("Please upload a trip segments file to start processing.")
 
-    # Include all helper functions as before
-
 def read_uploaded_file(uploaded_file):
     """Reads the uploaded CSV or Excel file and returns a DataFrame."""
     try:
+        # Define dtype dictionary to force Barcode as string
+        dtype_dict = {'Barcode': str}
+        
         if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_file, dtype=dtype_dict)
         elif uploaded_file.name.endswith(".xlsx"):
-            df = pd.read_excel(uploaded_file, engine='openpyxl')
+            df = pd.read_excel(uploaded_file, engine='openpyxl', dtype=dtype_dict)
         else:
             st.error("Unsupported file type. Please upload a CSV or Excel file.")
             st.stop()
+            
+        # Additional safeguard to ensure Barcode remains string
+        if 'Barcode' in df.columns:
+            df['Barcode'] = df['Barcode'].astype(str)
+        
         return df
     except Exception as e:
         st.error(f"Error reading the uploaded file: {e}")
@@ -192,7 +186,7 @@ def sort_dataframe(df, sequence_column):
             df = df.sort_values(by=['Order #', 'Passenger', 'Schedule Date', sequence_column])
         else:
             df = df.sort_values(by=['Order #', 'Passenger', 'Schedule Date'])
-            st.warning("No sequence column found. Sorting by 'Order #', 'Passenger', and 'Schedule Date' only. Ensure your data is in the correct order.")
+            st.warning("No sequence column found. Sorting by 'Order #', 'Passenger', and 'Schedule Date' only.")
         return df
     except Exception as e:
         st.error(f"Error sorting the DataFrame: {e}")
@@ -219,21 +213,18 @@ def determine_trip_origin_destination(trip_segments, order_number, schedule_date
         )
         return None, None, anomalies
 
-    # Initialize trip origin and destination
     trip_origin = trip_segments[0]['BP Origin']
     trip_destination = None
 
     if not trip_origin:
         anomalies.append(
-            f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Missing BP Origin in the first segment."
+            f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Missing BP Origin in first segment."
         )
         return None, None, anomalies
 
-    # Set to keep track of visited nodes
     visited_nodes = set()
     visited_nodes.add(trip_origin)
 
-    # Traverse segments starting from the second segment
     for i in range(1, len(trip_segments)):
         current_segment = trip_segments[i]
         bp_origin = current_segment.get('BP Origin')
@@ -245,21 +236,15 @@ def determine_trip_origin_destination(trip_segments, order_number, schedule_date
             )
             continue
 
-        # Check if BP Origin has been visited before
         if bp_origin in visited_nodes:
-            # Trip destination is BP Origin of the previous segment
             trip_destination = trip_segments[i - 1]['BP Origin']
             break
         else:
-            # Add BP Origin to visited_nodes
             visited_nodes.add(bp_origin)
 
-    # If destination not found during traversal
     if trip_destination is None:
-        # Trip destination is BP Destination of the last segment
         trip_destination = trip_segments[-1]['BP Destination']
 
-    # Anomaly Detection
     if trip_destination is None:
         anomalies.append(
             f"Order {order_number}, Passenger {passenger}, Date {schedule_date}: Could not determine trip destination."
@@ -274,7 +259,7 @@ def display_anomalies(all_anomalies):
         with st.expander("Click to view anomalies"):
             for anomaly in all_anomalies:
                 st.write(f"- {anomaly}")
-        # Option to download anomalies
+        
         anomalies_df = pd.DataFrame({'Anomalies': all_anomalies})
         anomalies_csv = anomalies_df.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -287,17 +272,50 @@ def display_anomalies(all_anomalies):
         st.success("Processing complete without anomalies!")
 
 def download_processed_data(result_df):
-    """Allows users to download the processed data as a CSV file."""
-    csv = result_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Processed Data as CSV",
-        data=csv,
-        file_name='processed_trips.csv',
-        mime='text/csv'
-    )
+    """Allows users to download the processed data as Excel only to preserve formatting."""
+    try:
+        # Create Excel file in memory
+        output = BytesIO()
+        
+        # Create a copy of the dataframe for export to avoid modifying the original
+        export_df = result_df.copy()
+        
+        # Handle Barcode column formatting for Excel
+        if 'Barcode' in export_df.columns:
+            # Make sure Barcode is string type but without visible quotes
+            export_df['Barcode'] = export_df['Barcode'].astype(str).str.lstrip("'")
+        
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            export_df.to_excel(writer, index=False)
+            workbook = writer.book
+            worksheet = writer.sheets['Sheet1']
+            
+            # Find and format Barcode column
+            if 'Barcode' in export_df.columns:
+                barcode_col_idx = export_df.columns.get_loc('Barcode')
+                barcode_col_letter = chr(65 + barcode_col_idx)
+                
+                # Set column to text format
+                text_format = workbook.add_format({
+                    'num_format': '@',
+                    'text_wrap': False
+                })
+                worksheet.set_column(f'{barcode_col_letter}:{barcode_col_letter}', 20, text_format)
+        
+        output.seek(0)
+        
+        st.download_button(
+            label="Download as Excel",
+            data=output,
+            file_name='processed_trips.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+    except Exception as e:
+        st.error(f"Error creating Excel file: {e}")
 
 def download_customer_summary(summary_df):
-    """Allows users to download the customer summary as a CSV file."""
+    """Allows users to download the customer summary as CSV."""
     csv = summary_df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download Customer Summary as CSV",
