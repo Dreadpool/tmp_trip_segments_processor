@@ -32,34 +32,8 @@ def main():
         - If your data includes a column indicating the sequence of segments (e.g., 'Barcode', 'Segment Number', 'Departure Time'), it will improve accuracy.
         """)
 
-    # Sidebar for Customer Data Management
-    st.sidebar.header("Customer Data Management")
-
-    if 'customer_data' not in st.session_state:
-        st.session_state['customer_data'] = None
-
-    # Option to upload a new customer data file
-    upload_new_customer_file = st.sidebar.checkbox("Upload new customer data file")
-
-    if upload_new_customer_file or st.session_state['customer_data'] is None:
-        # File uploader for customer data file
-        customer_file = st.sidebar.file_uploader("Upload Customer Data File", type=["csv"])
-        if customer_file is not None:
-            # Read customer data file content
-            customer_file_content = customer_file.getvalue()
-            customer_file_name = customer_file.name
-
-            # Load and cache the customer data
-            customer_data = load_customer_data(customer_file_content, customer_file_name)
-            st.session_state['customer_data'] = customer_data
-
-            st.sidebar.success("Customer data loaded and cached successfully.")
-        else:
-            st.sidebar.info("Please upload a customer data file.")
-            st.stop()
-    else:
-        customer_data = st.session_state['customer_data']
-        st.sidebar.success("Using cached customer data.")
+    # Load customer data from backend file
+    customer_data = load_customer_data()
 
     # Main file uploader for trip segments
     uploaded_file = st.file_uploader("Upload Trip Segments File", type=["csv", "xlsx"])
@@ -157,7 +131,7 @@ def main():
     else:
         st.info("Please upload a trip segments file to start processing.")
 
-# Helper functions
+# Helper functions (include all helper functions as before)
 
 def read_uploaded_file(uploaded_file):
     """Reads the uploaded CSV or Excel file and returns a DataFrame."""

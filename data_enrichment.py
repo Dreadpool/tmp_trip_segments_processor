@@ -2,18 +2,13 @@
 
 import pandas as pd
 import streamlit as st
-from io import BytesIO
 
-@st.cache_resource
-def load_customer_data(file_content, file_name):
-    """Loads the backend customer data and caches it."""
+def load_customer_data(file_path='customer_data.csv'):
+    """Loads the backend customer data from a CSV file."""
     try:
-        # Wrap the bytes content in a BytesIO object
-        file_like_object = BytesIO(file_content)
-        
-        # Read the CSV file from the BytesIO object
+        # Read the CSV file from the specified file path
         customer_df = pd.read_csv(
-            file_like_object,
+            file_path,
             encoding='latin1',  # Adjust encoding if necessary
             sep=',',
             usecols=[
