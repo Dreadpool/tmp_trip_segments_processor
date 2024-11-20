@@ -9,8 +9,8 @@ def main():
     # Streamlit app title and description
     st.title("Trip Origin and Destination Processor with Data Enrichment")
     st.write("""
-    Upload a CSV or Excel file (.xlsx) containing trip segments. This app will determine the overall trip origin and destination for each trip
-    based on the data provided and enrich the data with customer information.
+    Upload a CSV or Excel file containing trip segments. This app will determine the overall trip origin and destination for each trip
+    and enrich the data using customer information.
 
     **Required columns in the uploaded file**:
     - **Order #**
@@ -26,37 +26,52 @@ def main():
     # Instructions in an expander
     with st.expander("Instructions"):
         st.write("""
-        - Ensure your data file includes the required columns:
-            - **Order #**
-            - **Passenger** or **Pax**
-            - **BP Origin**
-            - **BP Destination**
-            - **Schedule Date**
-            - **Customer Email** or **Cust Email**
-        - Columns must be named exactly as specified.
+        - Ensure your data file includes all the required columns.
+        - The **Customer Email** column (or **Cust Email**) is used to match records with the backend customer data.
         - Dates should be in a consistent format (e.g., **MM/DD/YYYY**).
         - If your data includes a column indicating the sequence of segments (e.g., 'Barcode', 'Segment Number', 'Departure Time'), it will improve accuracy.
-        - The app groups records by **Order #**, **Schedule Date**, and **Passenger**.
         """)
 
-    # File uploader widget for users to upload CSV or Excel files
-    uploaded_file = st.file_uploader("Choose a trip segments file", type=["csv", "xlsx"])
+    # Sidebar for Customer Data Management
+    st.sidebar.header("Customer Data Management")
 
-    # File uploader for customer data file
-    customer_file = st.file_uploader("Choose a customer data file", type=["csv"])
+    if 'customer_data' not in st.session_state:
+        st.session_state['customer_data'] = None
+
+    # Option to upload a new customer data file
+    upload_new_customer_file = st.sidebar.checkbox("Upload new customer data file")
+
+    if upload_new_customer_file or st.session_state['customer_data'] is None:
+        # File uploader for customer data file
+        customer_file = st.sidebar.file_uploader("Upload Customer Data File", type=["csv"])
+        if customer_file is not None:
+            # Read customer data file content
+            customer_file_content = customer_file.getvalue()
+            customer_file_name = customer_file.name
+
+            # Load and cache the customer data
+            customer_data = load_customer_data(customer_file_content, customer_file_name)
+            st.session_state['customer_data'] = customer_data
+
+            st.sidebar.success("Customer data loaded and cached successfully.")
+        else:
+            st.sidebar.info("Please upload a customer data file.")
+            st.stop()
+    else:
+        customer_data = st.session_state['customer_data']
+        st.sidebar.success("Using cached customer data.")
+
+    # Main file uploader for trip segments
+    uploaded_file = st.file_uploader("Upload Trip Segments File", type=["csv", "xlsx"])
 
     # Main processing logic
-    if uploaded_file is not None and customer_file is not None:
+    if uploaded_file is not None:
         try:
             # Read the uploaded trip segments file
             df = read_uploaded_file(uploaded_file)
 
-            # Read the customer data file
-            customer_data = load_customer_data(customer_file)
-
             # Check if required columns are present
             required_columns = ['Order #', 'BP Origin', 'BP Destination', 'Schedule Date']
-            passenger_column = None
             if 'Passenger' in df.columns:
                 passenger_column = 'Passenger'
             elif 'Pax' in df.columns:
@@ -94,7 +109,7 @@ def main():
             # Enrich the uploaded data with customer data
             df = enrich_uploaded_data(df, customer_data)
 
-            # Proceed with your existing logic
+            # Proceed with the existing logic
             # Convert DataFrame to list of dictionaries
             records = df.to_dict(orient='records')
 
@@ -140,7 +155,9 @@ def main():
             st.error(f"An unexpected error occurred while processing the file: {e}")
             st.stop()
     else:
-        st.info("Please upload both the trip segments file and the customer data file to start processing.")
+        st.info("Please upload a trip segments file to start processing.")
+
+# Helper functions
 
 def read_uploaded_file(uploaded_file):
     """Reads the uploaded CSV or Excel file and returns a DataFrame."""
