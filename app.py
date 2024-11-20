@@ -5,6 +5,9 @@ from collections import defaultdict
 # Import the data enrichment functions
 from data_enrichment import load_customer_data, enrich_uploaded_data
 
+# Import the customer summary function
+from customer_summary import generate_customer_summary
+
 def main():
     # Streamlit app title and description
     st.title("Trip Origin and Destination Processor with Data Enrichment")
@@ -37,6 +40,9 @@ def main():
 
     # Main file uploader for trip segments
     uploaded_file = st.file_uploader("Upload Trip Segments File", type=["csv", "xlsx"])
+
+    # Checkbox to generate unique customer summary
+    generate_customer_summary_checkbox = st.checkbox("Generate Unique Customer Summary")
 
     # Main processing logic
     if uploaded_file is not None:
@@ -83,47 +89,59 @@ def main():
             # Enrich the uploaded data with customer data
             df = enrich_uploaded_data(df, customer_data)
 
-            # Proceed with the existing logic
-            # Convert DataFrame to list of dictionaries
-            records = df.to_dict(orient='records')
+            # If the checkbox is selected, generate customer summary
+            if generate_customer_summary_checkbox:
+                customer_summary_df = generate_customer_summary(df)
 
-            # Group trip segments by Order #, Schedule Date, and Passenger
-            orders = group_trip_segments(records)
+                # Display the customer summary
+                st.write("Unique Customer Summary:")
+                st.dataframe(customer_summary_df)
 
-            # Initialize a list to collect all anomalies
-            all_anomalies = []
+                # Allow users to download the customer summary as a CSV file
+                download_customer_summary(customer_summary_df)
+            else:
+                # Proceed with the existing logic
 
-            # Process each trip group
-            processed_records = []
-            for key, trip_segments in orders.items():
-                order_number, schedule_date, passenger = key
+                # Convert DataFrame to list of dictionaries
+                records = df.to_dict(orient='records')
 
-                # Determine trip origin and destination
-                trip_origin, trip_destination, anomalies = determine_trip_origin_destination(
-                    trip_segments, order_number, schedule_date, passenger
-                )
+                # Group trip segments by Order #, Schedule Date, and Passenger
+                orders = group_trip_segments(records)
 
-                # Collect anomalies
-                all_anomalies.extend(anomalies)
+                # Initialize a list to collect all anomalies
+                all_anomalies = []
 
-                # Append Trip Origin and Trip Destination to each segment record
-                for segment in trip_segments:
-                    segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
-                    segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
-                    processed_records.append(segment)
+                # Process each trip group
+                processed_records = []
+                for key, trip_segments in orders.items():
+                    order_number, schedule_date, passenger = key
 
-            # Convert updated records back to a DataFrame
-            result_df = pd.DataFrame(processed_records)
+                    # Determine trip origin and destination
+                    trip_origin, trip_destination, anomalies = determine_trip_origin_destination(
+                        trip_segments, order_number, schedule_date, passenger
+                    )
 
-            # Display anomalies if any were found
-            display_anomalies(all_anomalies)
+                    # Collect anomalies
+                    all_anomalies.extend(anomalies)
 
-            # Display the processed data
-            st.write("Processed and Enriched Data:")
-            st.dataframe(result_df)
+                    # Append Trip Origin and Trip Destination to each segment record
+                    for segment in trip_segments:
+                        segment['Trip Origin'] = trip_origin if trip_origin else 'Unknown'
+                        segment['Trip Destination'] = trip_destination if trip_destination else 'Unknown'
+                        processed_records.append(segment)
 
-            # Allow users to download the processed data as a CSV file
-            download_processed_data(result_df)
+                # Convert updated records back to a DataFrame
+                result_df = pd.DataFrame(processed_records)
+
+                # Display anomalies if any were found
+                display_anomalies(all_anomalies)
+
+                # Display the processed data
+                st.write("Processed and Enriched Data:")
+                st.dataframe(result_df)
+
+                # Allow users to download the processed data as a CSV file
+                download_processed_data(result_df)
 
         except Exception as e:
             st.error(f"An unexpected error occurred while processing the file: {e}")
@@ -131,7 +149,7 @@ def main():
     else:
         st.info("Please upload a trip segments file to start processing.")
 
-# Helper functions (include all helper functions as before)
+    # Include all helper functions as before
 
 def read_uploaded_file(uploaded_file):
     """Reads the uploaded CSV or Excel file and returns a DataFrame."""
@@ -275,6 +293,16 @@ def download_processed_data(result_df):
         label="Download Processed Data as CSV",
         data=csv,
         file_name='processed_trips.csv',
+        mime='text/csv'
+    )
+
+def download_customer_summary(summary_df):
+    """Allows users to download the customer summary as a CSV file."""
+    csv = summary_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Customer Summary as CSV",
+        data=csv,
+        file_name='customer_summary.csv',
         mime='text/csv'
     )
 
